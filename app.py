@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 
-from config import SUPPORTED_SYMBOLS, SYMBOL_DISPLAY, MC_SWING_DAYS, MC_INTRADAY_HOURS
+from config import SUPPORTED_SYMBOLS, SYMBOL_DISPLAY, MC_SWING_DAYS, MC_INTRADAY_HOURS, MC_N_PATHS
 from schemas.inputs import UserInput
 
 # Data
@@ -35,7 +35,9 @@ from ui.charts import (
 from ui.components import (
     agent_card_technical, agent_card_news, agent_card_risk,
     agent_card_macro, final_trade_ticket,
+    page_header, section_header, disagreement_banner, sim_stats_row,
 )
+from ui.styles import inject_css
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -43,6 +45,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+inject_css()
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -76,12 +79,18 @@ with st.sidebar:
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 if mode == "Single Asset":
-    st.title("Multi-Agent Trading Desk")
-    st.caption(f"Analyzing: **{SYMBOL_DISPLAY.get(symbol, symbol)}** | Horizon: {time_horizon} | Risk: {risk_mode}")
+    page_header("Multi-Agent Trading Desk", {
+        "symbol": SYMBOL_DISPLAY.get(symbol, symbol),
+        "horizon": time_horizon.title(),
+        "risk": risk_mode.title(),
+    })
 else:
-    st.title("Portfolio Analysis Mode")
-    names = ", ".join(SYMBOL_DISPLAY.get(s, s) for s in symbols)
-    st.caption(f"Symbols: **{names}** | Horizon: {time_horizon} | Risk: {risk_mode}")
+    names = " · ".join(SYMBOL_DISPLAY.get(s, s) for s in symbols)
+    page_header("Portfolio Analysis", {
+        "symbols": names,
+        "horizon": time_horizon.title(),
+        "risk": risk_mode.title(),
+    })
 
 if not run_button:
     if mode == "Portfolio" and len(symbols) < 2:
@@ -146,11 +155,11 @@ if mode == "Single Asset":
         headlines = fetch_headlines(symbol)
 
     # ── Market snapshot ────────────────────────────────────────────────────────
-    st.subheader("Market Snapshot")
+    section_header("Market Snapshot")
     snap_cols = st.columns(6)
 
     price_display = rt_quote["current"] if rt_quote else price
-    price_label   = "Live Price" if rt_quote else "Price (delayed)"
+    price_label   = ("🟢 Live Price" if rt_quote else "Price")
     delta_display = returns.get("1d") or returns.get("1h", 0)
 
     snap_cols[0].metric(price_label, f"${price_display:,.2f}", f"{delta_display:+.2%}")
@@ -176,7 +185,7 @@ if mode == "Single Asset":
             pc[3].metric("IPO Date",   profile.get("ipo", "—"))
 
     # ── Charts ─────────────────────────────────────────────────────────────────
-    st.subheader("Technical Charts")
+    section_header("Technical Charts")
     chart_tab1, chart_tab2, chart_tab3 = st.tabs(["Price + Bollinger Bands", "MACD", "RSI"])
     with chart_tab1:
         st.plotly_chart(enhanced_price_chart(df, symbol, bb_data, time_horizon), use_container_width=True)
@@ -196,76 +205,71 @@ if mode == "Single Asset":
 
     # ── Macro section ──────────────────────────────────────────────────────────
     if macro_ctx.get("available"):
-        st.subheader("Macro Context (FRED)")
+        section_header("Macro Context — FRED")
         st.plotly_chart(macro_chart(macro_ctx, vix), use_container_width=True)
         detected_regime = macro_ctx.get("regime", "unknown")
         st.caption(f"Detected regime: **{detected_regime.replace('_', ' ').title()}**")
 
     # ── Run agents ─────────────────────────────────────────────────────────────
-    st.subheader("Agent Analysis")
+    section_header("Agent Analysis")
 
     col_tech, col_news = st.columns(2)
     col_risk, col_macro = st.columns(2)
 
     with col_tech:
-        with st.container(border=True):
-            with st.spinner("Running Technical Agent..."):
-                try:
-                    tech_result = technical_agent.run(market_context)
-                except Exception as e:
-                    st.error(f"Technical agent failed: {e}")
-                    st.stop()
-            agent_card_technical(tech_result)
+        with st.spinner("Running Technical Agent..."):
+            try:
+                tech_result = technical_agent.run(market_context)
+            except Exception as e:
+                st.error(f"Technical agent failed: {e}")
+                st.stop()
+        agent_card_technical(tech_result)
 
     with col_news:
-        with st.container(border=True):
-            with st.spinner("Running News Agent..."):
-                try:
-                    news_result = news_agent.run(symbol, headlines)
-                except Exception as e:
-                    st.error(f"News agent failed: {e}")
-                    st.stop()
-            agent_card_news(news_result)
+        with st.spinner("Running News Agent..."):
+            try:
+                news_result = news_agent.run(symbol, headlines)
+            except Exception as e:
+                st.error(f"News agent failed: {e}")
+                st.stop()
+        agent_card_news(news_result)
 
     # Macro agent (only if FRED available)
     macro_agent_result = None
     if macro_ctx.get("available"):
         with col_macro:
-            with st.container(border=True):
-                with st.spinner("Running Macro Agent..."):
-                    try:
-                        macro_agent_result = macro_agent.run(macro_ctx, symbol, time_horizon)
-                    except Exception as e:
-                        st.warning(f"Macro agent failed (non-fatal): {e}")
-                if macro_agent_result:
-                    agent_card_macro(macro_agent_result)
+            with st.spinner("Running Macro Agent..."):
+                try:
+                    macro_agent_result = macro_agent.run(macro_ctx, symbol, time_horizon)
+                except Exception as e:
+                    st.warning(f"Macro agent failed (non-fatal): {e}")
+            if macro_agent_result:
+                agent_card_macro(macro_agent_result)
 
     # Risk agent
     with col_risk:
-        with st.container(border=True):
-            with st.spinner("Running Risk Manager..."):
-                try:
-                    risk_result = risk_agent.run(tech_result, news_result, risk_constraints, market_context)
-                except Exception as e:
-                    st.error(f"Risk agent failed: {e}")
-                    st.stop()
-            agent_card_risk(risk_result)
+        with st.spinner("Running Risk Manager..."):
+            try:
+                risk_result = risk_agent.run(tech_result, news_result, risk_constraints, market_context)
+            except Exception as e:
+                st.error(f"Risk agent failed: {e}")
+                st.stop()
+        agent_card_risk(risk_result)
 
     # Portfolio agent
     st.divider()
-    with st.container(border=True):
-        with st.spinner("Running Portfolio Manager..."):
-            try:
-                portfolio_result = portfolio_agent.run(
-                    tech_result, news_result, risk_result, risk_constraints, macro_agent_result
-                )
-                portfolio_result = enforce_constraints(portfolio_result, max_risk_pct, max_leverage)
-            except Exception as e:
-                st.error(f"Portfolio agent failed: {e}")
-                st.stop()
+    with st.spinner("Running Portfolio Manager..."):
+        try:
+            portfolio_result = portfolio_agent.run(
+                tech_result, news_result, risk_result, risk_constraints, macro_agent_result
+            )
+            portfolio_result = enforce_constraints(portfolio_result, max_risk_pct, max_leverage)
+        except Exception as e:
+            st.error(f"Portfolio agent failed: {e}")
+            st.stop()
 
-        st.subheader("Final Recommendation")
-        final_trade_ticket(portfolio_result, account_size)
+    section_header("Final Recommendation")
+    final_trade_ticket(portfolio_result, account_size)
 
     # ── Agent disagreement summary ─────────────────────────────────────────────
     actions = {
@@ -276,12 +280,11 @@ if mode == "Single Asset":
     }
     non_none = {k: v for k, v in actions.items() if v is not None}
     if len(set(non_none.values())) > 1:
-        parts = [f"**{k}**: {v}" for k, v in non_none.items()]
-        st.caption("Agent disagreement: " + " | ".join(parts))
+        disagreement_banner(non_none)
 
     # ── Monte Carlo simulation ─────────────────────────────────────────────────
     if portfolio_result.confidence >= 0.50 and portfolio_result.final_action != "hold":
-        st.subheader("GBM Monte Carlo Simulation")
+        section_header("GBM Monte Carlo Simulation")
         horizon = MC_INTRADAY_HOURS if time_horizon == "intraday" else MC_SWING_DAYS
         with st.spinner("Running simulation..."):
             sim = run_gbm_simulation(
@@ -292,10 +295,7 @@ if mode == "Single Asset":
                 symbol=symbol,
                 time_horizon=time_horizon,
             )
-        sim_col1, sim_col2, sim_col3 = st.columns(3)
-        sim_col1.metric("P(price ends higher)", f"{sim['prob_up']:.0%}")
-        sim_col2.metric("Median expected return", f"{sim['expected_return']:+.1%}")
-        sim_col3.metric("95% VaR", f"{sim['var_95']:.1%}")
+        sim_stats_row(sim["prob_up"], sim["expected_return"], sim["var_95"])
         st.plotly_chart(
             monte_carlo_chart(
                 sim, symbol,
@@ -306,9 +306,9 @@ if mode == "Single Asset":
             use_container_width=True,
         )
         st.caption(
-            f"GBM inputs: μ={mu:.1%} ann. drift · σ={vol:.1%} ann. vol · "
+            f"μ={mu:.1%} ann. drift · σ={vol:.1%} ann. vol · "
             f"{MC_N_PATHS} paths · {horizon} {'hours' if time_horizon == 'intraday' else 'days'} forward. "
-            "Simulation assumes constant drift and volatility; not a price forecast."
+            "Constant drift/vol assumed. Not a price forecast."
         )
     elif portfolio_result.final_action == "hold":
         st.info("Simulation skipped — recommendation is HOLD.")
@@ -364,7 +364,7 @@ else:
                 pass
 
     # ── Per-symbol agent analysis ──────────────────────────────────────────────
-    st.subheader("Per-Symbol Agent Analysis")
+    section_header("Per-Symbol Agent Analysis")
     per_symbol: dict = {}
 
     for sym in symbols:
@@ -396,14 +396,9 @@ else:
 
                 c3, c4 = st.columns([1, 1])
                 with c3:
-                    with st.container(border=True):
-                        agent_card_risk(risk_s)
+                    agent_card_risk(risk_s)
                 with c4:
-                    with st.container(border=True):
-                        st.markdown("#### Portfolio Manager")
-                        bias_map = {"long": "🟢 LONG", "short": "🔴 SHORT", "hold": "⚪ HOLD"}
-                        st.markdown(f"**{bias_map[port_s.final_action]}**")
-                        st.progress(port_s.confidence, text=f"Confidence: {port_s.confidence:.0%}")
+                    final_trade_ticket(port_s, account_size)
 
                 per_symbol[sym] = {
                     "df": df_s,
@@ -424,7 +419,7 @@ else:
 
     # ── Portfolio optimization ─────────────────────────────────────────────────
     st.divider()
-    st.subheader("Portfolio Optimization")
+    section_header("Portfolio Optimization")
 
     with st.spinner("Optimizing portfolio (mean-variance)..."):
         hist_returns = fetch_multi_returns(list(per_symbol.keys()))
@@ -456,7 +451,7 @@ else:
             st.plotly_chart(correlation_heatmap(opt["correlation_matrix"]), use_container_width=True)
 
     # ── Per-symbol price charts ────────────────────────────────────────────────
-    st.subheader("Price Charts")
+    section_header("Price Charts")
     for sym, d in per_symbol.items():
         st.plotly_chart(
             enhanced_price_chart(d["df"], sym, compute_bollinger_bands(d["df"]), time_horizon),
@@ -465,19 +460,18 @@ else:
 
     # ── Macro section ──────────────────────────────────────────────────────────
     if macro_ctx.get("available"):
-        st.subheader("Macro Context")
+        section_header("Macro Context — FRED")
         macro_chart_col, macro_card_col = st.columns([2, 1])
         with macro_chart_col:
             st.plotly_chart(macro_chart(macro_ctx, vix), use_container_width=True)
         if macro_agent_result:
             with macro_card_col:
-                with st.container(border=True):
-                    agent_card_macro(macro_agent_result)
+                agent_card_macro(macro_agent_result)
 
     # ── Portfolio simulation (correlated GBM) ─────────────────────────────────
     eligible = opt["eligible_symbols"]
     if eligible and isinstance(opt.get("correlation_matrix"), pd.DataFrame):
-        st.subheader("Portfolio GBM Simulation (Correlated)")
+        section_header("Portfolio GBM Simulation — Correlated Paths")
         horizon = MC_INTRADAY_HOURS if time_horizon == "intraday" else MC_SWING_DAYS
         w_sharpe = opt["weights_max_sharpe"]
         prices_s = {s: per_symbol[s]["price"] for s in eligible}
@@ -497,21 +491,15 @@ else:
                     time_horizon=time_horizon,
                 )
                 if port_sim:
-                    ps_col1, ps_col2, ps_col3 = st.columns(3)
-                    ps_col1.metric("P(portfolio up)",         f"{port_sim['prob_up']:.0%}")
-                    ps_col2.metric("Median expected return",  f"{port_sim['expected_return']:+.1%}")
-                    ps_col3.metric("95% VaR",                 f"{port_sim['var_95']:.1%}")
+                    sim_stats_row(port_sim["prob_up"], port_sim["expected_return"], port_sim["var_95"])
                     label = "Hours" if time_horizon == "intraday" else "Days"
                     st.plotly_chart(portfolio_sim_chart(port_sim, label), use_container_width=True)
-                    st.caption(
-                        "Correlated simulation via Cholesky decomposition. "
-                        "Based on 6-month historical correlations. Not a price forecast."
-                    )
+                    st.caption("Correlated paths via Cholesky decomposition · 6-month historical correlations · not a price forecast.")
             except Exception as e:
                 st.warning(f"Portfolio simulation failed: {e}")
 
     # ── Final allocation table ─────────────────────────────────────────────────
-    st.subheader("Final Allocation")
+    section_header("Final Allocation")
     rows = []
     for sym in symbols:
         d = per_symbol.get(sym)
