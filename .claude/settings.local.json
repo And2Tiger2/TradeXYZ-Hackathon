@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile config.py data/market.py data/indicators.py data/macro.py data/finnhub_data.py data/simulation.py data/portfolio_optimizer.py schemas/outputs.py agents/macro.py agents/portfolio.py ui/charts.py ui/components.py app.py)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

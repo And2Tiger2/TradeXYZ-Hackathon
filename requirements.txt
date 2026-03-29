@@ -1,0 +1,12 @@
+streamlit
+anthropic
+yfinance
+pydantic>=2.0
+plotly
+python-dotenv
+requests
+pandas
+numpy
+scipy
+finnhub-python
+fredapi
